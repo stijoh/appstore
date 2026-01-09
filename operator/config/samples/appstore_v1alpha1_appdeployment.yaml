@@ -1,0 +1,19 @@
+apiVersion: appstore.bitpipe.no/v1alpha1
+kind: AppDeployment
+metadata:
+  labels:
+    app.kubernetes.io/name: appstore-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: appdeployment-sample
+  namespace: default
+spec:
+  appName: postgresql
+  teamId: "team-alpha"
+  requestedBy: "developer@bitpipe.no"
+  values:
+    auth:
+      postgresPassword: "changeme"
+      database: "myapp"
+    primary:
+      persistence:
+        size: 1Gi
