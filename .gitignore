@@ -53,3 +53,6 @@ charts/**/charts/
 operator/bin/
 operator/testbin/
 operator/cover.out
+
+# local cluster files
+localcluster/
