@@ -63,6 +63,13 @@ spec:
           args:
             - --leader-elect
             - --health-probe-bind-address=:8081
+            - --rabbitmq-enabled=$(RABBITMQ_ENABLED)
+            - --rabbitmq-url=$(RABBITMQ_URL)
+          env:
+            - name: RABBITMQ_ENABLED
+              value: "false"
+            - name: RABBITMQ_URL
+              value: "amqp://appstore:appstore@localhost:5672/appstore"
           image: controller:latest
           name: manager
           ports: []

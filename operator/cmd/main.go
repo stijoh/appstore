@@ -41,6 +41,7 @@ import (
 	"appstore/operator/internal/chartsync"
 	"appstore/operator/internal/controller"
 	"appstore/operator/internal/helm"
+	"appstore/operator/internal/rabbitmq"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -69,6 +70,8 @@ func main() {
 	var chartsBranch string
 	var chartsLocalPath string
 	var chartsSyncInterval time.Duration
+	var rabbitmqURL string
+	var rabbitmqEnabled bool
 	var tlsOpts []func(*tls.Config)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
@@ -98,6 +101,12 @@ func main() {
 		"Local path to store synced charts")
 	flag.DurationVar(&chartsSyncInterval, "charts-sync-interval", 5*time.Minute,
 		"Interval between chart sync operations")
+
+	// RabbitMQ flags
+	flag.BoolVar(&rabbitmqEnabled, "rabbitmq-enabled", false,
+		"Enable RabbitMQ consumer for deployment requests")
+	flag.StringVar(&rabbitmqURL, "rabbitmq-url", "amqp://appstore:appstore@localhost:5672/appstore",
+		"RabbitMQ connection URL")
 
 	opts := zap.Options{
 		Development: true,
@@ -243,8 +252,39 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Create signal handler context (can only be called once)
+	signalCtx := ctrl.SetupSignalHandler()
+
+	// Start RabbitMQ consumer if enabled
+	if rabbitmqEnabled {
+		setupLog.Info("Starting RabbitMQ consumer", "url", rabbitmqURL)
+
+		handler := rabbitmq.NewDeploymentHandler(mgr.GetClient())
+		consumer := rabbitmq.NewConsumer(rabbitmq.ConsumerConfig{
+			URL:      rabbitmqURL,
+			Exchange: "appstore",
+			Queue:    "appstore.deployments",
+			RoutingKeys: []string{
+				"deployment.request",
+				"deployment.update",
+				"deployment.delete",
+			},
+			ConsumerTag:   "appstore-operator",
+			PrefetchCount: 10,
+		}, handler)
+
+		// Start consumer in a goroutine
+		go func() {
+			if err := consumer.Start(signalCtx); err != nil {
+				setupLog.Error(err, "RabbitMQ consumer stopped")
+			}
+		}()
+
+		setupLog.Info("RabbitMQ consumer started")
+	}
+
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(signalCtx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
