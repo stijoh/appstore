@@ -49,7 +49,18 @@ func (r *Router) healthz(w http.ResponseWriter, req *http.Request) {
 	w.Write([]byte("ok"))
 }
 
-// ServeHTTP implements http.Handler
+// ServeHTTP implements http.Handler with CORS support
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	// CORS headers
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	// Handle preflight requests
+	if req.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	r.mux.ServeHTTP(w, req)
 }
