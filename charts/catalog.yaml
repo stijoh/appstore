@@ -1,0 +1,22 @@
+apps:
+  - name: postgresql
+    displayName: PostgreSQL
+    description: PostgreSQL is a powerful, open source object-relational database system with a strong reputation for reliability, feature robustness, and performance.
+    icon: postgresql.svg
+    category: database
+    chartPath: postgresql
+    tags:
+      - database
+      - sql
+      - relational
+
+  - name: valkey
+    displayName: Valkey
+    description: Valkey is an open source, high-performance key/value store that is fully compatible with Redis protocol.
+    icon: valkey.svg
+    category: cache
+    chartPath: valkey
+    tags:
+      - cache
+      - key-value
+      - in-memory

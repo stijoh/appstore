@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"appstore/backend/internal/k8s"
 	"appstore/backend/internal/rabbitmq"
 	"appstore/backend/pkg/models"
 )
@@ -29,19 +30,26 @@ type UpdateRequest struct {
 // Handler handles deployment HTTP requests
 type Handler struct {
 	publisher *rabbitmq.Publisher
+	k8sClient *k8s.Client
 	logger    *slog.Logger
 }
 
 // NewHandler creates a new deployment handler
-func NewHandler(publisher *rabbitmq.Publisher) *Handler {
+func NewHandler(publisher *rabbitmq.Publisher, k8sClient *k8s.Client) *Handler {
 	return &Handler{
 		publisher: publisher,
+		k8sClient: k8sClient,
 		logger:    slog.Default().With("component", "deployment-handler"),
 	}
 }
 
 // Create handles POST /api/v1/deployments
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
+	if h.publisher == nil {
+		h.respondError(w, http.StatusServiceUnavailable, "RabbitMQ not available")
+		return
+	}
+
 	var req CreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.respondError(w, http.StatusBadRequest, "invalid request body")
@@ -95,33 +103,64 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 // List handles GET /api/v1/deployments
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement listing deployments from Kubernetes
-	h.respondJSON(w, http.StatusOK, map[string]interface{}{
-		"deployments": []interface{}{},
-		"message":     "listing deployments not yet implemented",
-	})
-}
-
-// Get handles GET /api/v1/deployments/{id}
-func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		h.respondError(w, http.StatusBadRequest, "deployment id is required")
+	if h.k8sClient == nil {
+		h.respondError(w, http.StatusServiceUnavailable, "Kubernetes not available")
 		return
 	}
 
-	// TODO: Implement getting deployment from Kubernetes
+	namespace := r.URL.Query().Get("namespace")
+
+	deployments, err := h.k8sClient.ListAppDeployments(r.Context(), namespace)
+	if err != nil {
+		h.logger.Error("failed to list deployments", "error", err)
+		h.respondError(w, http.StatusInternalServerError, "failed to list deployments")
+		return
+	}
+
 	h.respondJSON(w, http.StatusOK, map[string]interface{}{
-		"id":      id,
-		"message": "get deployment not yet implemented",
+		"deployments": deployments,
 	})
 }
 
-// Update handles PUT /api/v1/deployments/{id}
+// Get handles GET /api/v1/deployments/{name}
+func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	if h.k8sClient == nil {
+		h.respondError(w, http.StatusServiceUnavailable, "Kubernetes not available")
+		return
+	}
+
+	name := r.PathValue("name")
+	if name == "" {
+		h.respondError(w, http.StatusBadRequest, "deployment name is required")
+		return
+	}
+
+	// Default to "default" namespace, can be overridden with query param
+	namespace := r.URL.Query().Get("namespace")
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	deployment, err := h.k8sClient.GetAppDeployment(r.Context(), namespace, name)
+	if err != nil {
+		h.logger.Error("failed to get deployment", "error", err, "name", name, "namespace", namespace)
+		h.respondError(w, http.StatusNotFound, "deployment not found")
+		return
+	}
+
+	h.respondJSON(w, http.StatusOK, deployment)
+}
+
+// Update handles PUT /api/v1/deployments/{name}
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		h.respondError(w, http.StatusBadRequest, "deployment id is required")
+	if h.k8sClient == nil || h.publisher == nil {
+		h.respondError(w, http.StatusServiceUnavailable, "Kubernetes or RabbitMQ not available")
+		return
+	}
+
+	name := r.PathValue("name")
+	if name == "" {
+		h.respondError(w, http.StatusBadRequest, "deployment name is required")
 		return
 	}
 
@@ -131,12 +170,22 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Get team ID and user ID from auth context
-	teamID := "default-team"
-	userID := "anonymous"
+	// Default to "default" namespace, can be overridden with query param
+	namespace := r.URL.Query().Get("namespace")
+	if namespace == "" {
+		namespace = "default"
+	}
 
-	// TODO: Get namespace from deployment lookup
-	namespace := "default"
+	// Verify deployment exists and get its details
+	deployment, err := h.k8sClient.GetAppDeployment(r.Context(), namespace, name)
+	if err != nil {
+		h.respondError(w, http.StatusNotFound, "deployment not found")
+		return
+	}
+
+	// TODO: Get team ID and user ID from auth context
+	teamID := deployment.TeamID
+	userID := "anonymous"
 
 	requestID := uuid.New().String()
 
@@ -144,7 +193,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		RequestID: requestID,
 		TeamID:    teamID,
 		UserID:    userID,
-		Name:      id,
+		Name:      name,
 		Namespace: namespace,
 		Version:   req.Version,
 		Values:    req.Values,
@@ -158,7 +207,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Info("deployment update published",
 		"requestId", requestID,
-		"name", id,
+		"name", name,
 	)
 
 	h.respondJSON(w, http.StatusAccepted, map[string]interface{}{
@@ -167,20 +216,35 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Delete handles DELETE /api/v1/deployments/{id}
+// Delete handles DELETE /api/v1/deployments/{name}
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		h.respondError(w, http.StatusBadRequest, "deployment id is required")
+	if h.k8sClient == nil || h.publisher == nil {
+		h.respondError(w, http.StatusServiceUnavailable, "Kubernetes or RabbitMQ not available")
+		return
+	}
+
+	name := r.PathValue("name")
+	if name == "" {
+		h.respondError(w, http.StatusBadRequest, "deployment name is required")
+		return
+	}
+
+	// Default to "default" namespace, can be overridden with query param
+	namespace := r.URL.Query().Get("namespace")
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	// Verify deployment exists and get its details
+	deployment, err := h.k8sClient.GetAppDeployment(r.Context(), namespace, name)
+	if err != nil {
+		h.respondError(w, http.StatusNotFound, "deployment not found")
 		return
 	}
 
 	// TODO: Get team ID and user ID from auth context
-	teamID := "default-team"
+	teamID := deployment.TeamID
 	userID := "anonymous"
-
-	// TODO: Get namespace from deployment lookup
-	namespace := "default"
 
 	requestID := uuid.New().String()
 
@@ -188,7 +252,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		RequestID: requestID,
 		TeamID:    teamID,
 		UserID:    userID,
-		Name:      id,
+		Name:      name,
 		Namespace: namespace,
 	}
 
@@ -200,7 +264,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Info("deployment delete published",
 		"requestId", requestID,
-		"name", id,
+		"name", name,
 	)
 
 	h.respondJSON(w, http.StatusAccepted, map[string]interface{}{

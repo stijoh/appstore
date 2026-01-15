@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"appstore/backend/internal/api"
+	"appstore/backend/internal/catalog"
+	"appstore/backend/internal/k8s"
 	"appstore/backend/internal/rabbitmq"
 )
 
@@ -18,11 +20,15 @@ func main() {
 	var (
 		addr        string
 		rabbitmqURL string
+		kubeconfig  string
+		catalogPath string
 	)
 
 	flag.StringVar(&addr, "addr", ":8080", "HTTP server address")
 	flag.StringVar(&rabbitmqURL, "rabbitmq-url", "amqp://appstore:appstore@localhost:5672/appstore",
 		"RabbitMQ connection URL")
+	flag.StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file (uses in-cluster config if empty)")
+	flag.StringVar(&catalogPath, "catalog-path", "charts/catalog.yaml", "Path to catalog.yaml file")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -32,22 +38,40 @@ func main() {
 
 	logger.Info("Starting appstore backend", "addr", addr)
 
-	// Initialize RabbitMQ publisher
-	publisher := rabbitmq.NewPublisher(rabbitmq.PublisherConfig{
+	// Initialize catalog service
+	catalogService := catalog.NewService(catalogPath)
+	if err := catalogService.Load(); err != nil {
+		logger.Error("Failed to load catalog", "error", err, "path", catalogPath)
+		os.Exit(1)
+	}
+	logger.Info("Catalog loaded", "path", catalogPath, "apps", len(catalogService.ListApps()))
+
+	// Initialize Kubernetes client (optional - deployment endpoints won't work without it)
+	var k8sClient *k8s.Client
+	k8sClient, err := k8s.NewClient(kubeconfig)
+	if err != nil {
+		logger.Warn("Failed to create Kubernetes client - deployment endpoints will be unavailable", "error", err)
+	} else {
+		logger.Info("Kubernetes client initialized")
+	}
+
+	// Initialize RabbitMQ publisher (optional - create deployment won't work without it)
+	var publisher *rabbitmq.Publisher
+	publisher = rabbitmq.NewPublisher(rabbitmq.PublisherConfig{
 		URL:      rabbitmqURL,
 		Exchange: "appstore",
 	})
 
 	if err := publisher.Connect(); err != nil {
-		logger.Error("Failed to connect to RabbitMQ", "error", err)
-		os.Exit(1)
+		logger.Warn("Failed to connect to RabbitMQ - create deployment will be unavailable", "error", err)
+		publisher = nil
+	} else {
+		defer publisher.Close()
+		logger.Info("Connected to RabbitMQ", "url", rabbitmqURL)
 	}
-	defer publisher.Close()
-
-	logger.Info("Connected to RabbitMQ", "url", rabbitmqURL)
 
 	// Initialize router
-	router := api.NewRouter(publisher)
+	router := api.NewRouter(publisher, k8sClient, catalogService)
 
 	// Create HTTP server
 	server := &http.Server{

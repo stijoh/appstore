@@ -3,7 +3,9 @@ package api
 import (
 	"net/http"
 
+	"appstore/backend/internal/catalog"
 	"appstore/backend/internal/deployment"
+	"appstore/backend/internal/k8s"
 	"appstore/backend/internal/rabbitmq"
 )
 
@@ -11,13 +13,15 @@ import (
 type Router struct {
 	mux               *http.ServeMux
 	deploymentHandler *deployment.Handler
+	catalogHandler    *catalog.Handler
 }
 
 // NewRouter creates a new router with all handlers
-func NewRouter(publisher *rabbitmq.Publisher) *Router {
+func NewRouter(publisher *rabbitmq.Publisher, k8sClient *k8s.Client, catalogService *catalog.Service) *Router {
 	r := &Router{
 		mux:               http.NewServeMux(),
-		deploymentHandler: deployment.NewHandler(publisher),
+		deploymentHandler: deployment.NewHandler(publisher, k8sClient),
+		catalogHandler:    catalog.NewHandler(catalogService),
 	}
 
 	r.setupRoutes()
@@ -28,12 +32,16 @@ func (r *Router) setupRoutes() {
 	// Health check
 	r.mux.HandleFunc("GET /healthz", r.healthz)
 
-	// API v1 routes
+	// Catalog routes
+	r.mux.HandleFunc("GET /api/v1/catalog", r.catalogHandler.List)
+	r.mux.HandleFunc("GET /api/v1/catalog/{appName}", r.catalogHandler.Get)
+
+	// Deployment routes
 	r.mux.HandleFunc("POST /api/v1/deployments", r.deploymentHandler.Create)
 	r.mux.HandleFunc("GET /api/v1/deployments", r.deploymentHandler.List)
-	r.mux.HandleFunc("GET /api/v1/deployments/{id}", r.deploymentHandler.Get)
-	r.mux.HandleFunc("PUT /api/v1/deployments/{id}", r.deploymentHandler.Update)
-	r.mux.HandleFunc("DELETE /api/v1/deployments/{id}", r.deploymentHandler.Delete)
+	r.mux.HandleFunc("GET /api/v1/deployments/{name}", r.deploymentHandler.Get)
+	r.mux.HandleFunc("PUT /api/v1/deployments/{name}", r.deploymentHandler.Update)
+	r.mux.HandleFunc("DELETE /api/v1/deployments/{name}", r.deploymentHandler.Delete)
 }
 
 func (r *Router) healthz(w http.ResponseWriter, req *http.Request) {
