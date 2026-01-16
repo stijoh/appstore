@@ -2,6 +2,23 @@
 
 A self-service platform for deploying infrastructure applications on Kubernetes. Teams can browse a catalog of pre-configured apps (PostgreSQL, Valkey, etc.) and deploy them with a single click.
 
+## Screenshots
+
+### App Catalog
+Browse available infrastructure apps with search and category filters.
+
+![App Catalog](docs/images/appcatalog.png)
+
+### Deployment in Progress
+Real-time status updates as your application deploys.
+
+![Deployment Progress](docs/images/appstoreimageprogress.png)
+
+### Deployment Complete
+View deployed applications with status, version, and Helm release details.
+
+![Deployment Finished](docs/images/appdeploymentfinished.png)
+
 ## Architecture
 
 ```
@@ -161,7 +178,7 @@ make docker-build   # Build container image
 - [x] Phase 1: Operator Foundation - Helm chart deployment via CRDs
 - [x] Phase 2: RabbitMQ Integration - Async message-based deployment
 - [x] Phase 3: Catalog Service & K8s Queries - REST API for catalog and deployments
-- [ ] Phase 4: Svelte Frontend - Web UI
+- [x] Phase 4: Svelte Frontend - Web UI with dark mode
 - [ ] Phase 5: Authentication - Keycloak integration
 
 ## License
