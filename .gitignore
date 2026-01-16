@@ -56,3 +56,9 @@ operator/cover.out
 
 # local cluster files
 localcluster/
+
+# Plan files (local only)
+PLAN.md
+
+# Backend binary
+backend/server
